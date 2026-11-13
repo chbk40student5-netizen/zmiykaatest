@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Гра Змійка зі Звуками</title>
+    <style>
+        body {
+            background-color: #1a1a2e;
+            color: #fff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+
+        h1 {
+            margin-bottom: 10px;
+            color: #4ecca3;
+        }
+
+        .scoreboard {
+            display: flex;
+            gap: 20px;
+            font-size: 1.2rem;
+            margin-bottom: 15px;
+        }
+
+        .controls-panel {
+            margin-bottom: 15px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        select, button {
+            padding: 8px 16px;
+            font-size: 1rem;
+            border-radius: 5px;
+            border: none;
+            outline: none;
+            cursor: pointer;
+        }
+
+        select {
+            background-color: #232946;
+            color: #fff;
+            border: 1px solid #4ecca3;
+        }
+
+        button {
+            background-color: #4ecca3;
+            color: #232946;
+            font-weight: bold;
+            transition: 0.2s;
+        }
+
+        button:hover {
+            background-color: #45b691;
+        }
+
+        canvas {
+            background-color: #162447;
+            border: 3px solid #4ecca3;
+            box-shadow: 0 0 20px rgba(78, 204, 163, 0.3);
+            border-radius: 8px;
+        }
+
+        .instructions {
+            margin-top: 15px;
+            color: #a0a5b5;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Змійка</h1>
+
+    <div class="scoreboard">
+        <div>Очки: <span id="score">0</span></div>
+        <div>Рекорд (<span id="diffLabel">Середній</span>): <span id="highScore">0</span></div>
+    </div>
+
+    <div class="controls-panel">
+        <label for="difficulty">Складність: </label>
+        <select id="difficulty">
+            <option value="easy">Легкий</option>
+            <option value="medium" selected>Середній</option>
+            <option value="hard">Складний</option>
+        </select>
+        <button id="startBtn">Старт / Перезапуск</button>
+    </div>
+
+    <canvas id="gameCanvas" width="400" height="400"></canvas>
+
+    <div class="instructions">Керування: <b>W, A, S, D</b> або <b>Стрілочки</b></div>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+
+        const scoreEl = document.getElementById("score");
+        const highScoreEl = document.getElementById("highScore");
+        const diffLabelEl = document.getElementById("diffLabel");
+        const difficultySelect = document.getElementById("difficulty");
+        const startBtn = document.getElementById("startBtn");
+
+        const gridSize = 20;
+        const tileCount = canvas.width / gridSize;
+
+        const speeds = {
+            easy: 150,
+            medium: 100,
+            hard: 50
+        };
+
+        const diffNames = {
+            easy: "Легкий",
+            medium: "Середній",
+            hard: "Складний"
+        };
+
+        let snake = [];
+        let food = { x: 0, y: 0 };
+        let dx = gridSize;
+        let dy = 0;
+        let score = 0;
+        let gameInterval = null;
+        let changingDirection = false;
+
+        // Web Audio API для звуків без завантаження додаткових файлів
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+        function playEatSound() {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(440, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(880, audioCtx.currentTime + 0.1);
+            gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.1);
+        }
+
+        function playGameOverSound() {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(300, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.3);
+            gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.3);
+        }
+
+        function getHighScore(diff) {
+            return localStorage.getItem("snakeHighScore_" + diff) || 0;
+        }
+
+        function updateHighScoreDisplay() {
+            const currentDiff = difficultySelect.value;
+            diffLabelEl.innerText = diffNames[currentDiff];
+            highScoreEl.innerText = getHighScore(currentDiff);
+        }
+
+        function initGame() {
+            snake = [
+                { x: 160, y: 200 },
+                { x: 140, y: 200 },
+                { x: 120, y: 200 }
+            ];
+            score = 0;
+            dx = gridSize;
+            dy = 0;
+            scoreEl.innerText = score;
+            updateHighScoreDisplay();
+            generateFood();
+
+            if (gameInterval) clearInterval(gameInterval);
+            const currentDiff = difficultySelect.value;
+            gameInterval = setInterval(gameLoop, speeds[currentDiff]);
+        }
+
+        function gameLoop() {
+            if (isGameOver()) {
+                clearInterval(gameInterval);
+                playGameOverSound();
+                alert("Гра закінчена! Твій результат: " + score);
+                return;
+            }
+
+            changingDirection = false;
+            clearCanvas();
+            drawFood();
+            moveSnake();
+            drawSnake();
+        }
+
+        function clearCanvas() {
+            ctx.fillStyle = "#162447";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+
+        function drawSnake() {
+            snake.forEach((part, index) => {
+                ctx.fillStyle = index === 0 ? "#4ecca3" : "#45b691";
+                ctx.fillRect(part.x, part.y, gridSize - 2, gridSize - 2);
+            });
+        }
+
+        function moveSnake() {
+            const head = { x: snake[0].x + dx, y: snake[0].y + dy };
+            snake.unshift(head);
+
+            if (head.x === food.x && head.y === food.y) {
+                playEatSound();
+                score += 10;
+                scoreEl.innerText = score;
+
+                const currentDiff = difficultySelect.value;
+                let highScore = getHighScore(currentDiff);
+                if (score > highScore) {
+                    highScore = score;
+                    highScoreEl.innerText = highScore;
+                    localStorage.setItem("snakeHighScore_" + currentDiff, highScore);
+                }
+                generateFood();
+            } else {
+                snake.pop();
+            }
+        }
+
+        function generateFood() {
+            food.x = Math.floor(Math.random() * tileCount) * gridSize;
+            food.y = Math.floor(Math.random() * tileCount) * gridSize;
+
+            snake.forEach(part => {
+                if (part.x === food.x && part.y === food.y) {
+                    generateFood();
+                }
+            });
+        }
+
+        function drawFood() {
+            ctx.fillStyle = "#e94560";
+            ctx.fillRect(food.x, food.y, gridSize - 2, gridSize - 2);
+        }
+
+        function isGameOver() {
+            const head = snake[0];
+
+            const hitLeft = head.x < 0;
+            const hitRight = head.x >= canvas.width;
+            const hitTop = head.y < 0;
+            const hitBottom = head.y >= canvas.height;
+
+            if (hitLeft || hitRight || hitTop || hitBottom) return true;
+
+            for (let i = 1; i < snake.length; i++) {
+                if (head.x === snake[i].x && head.y === snake[i].y) return true;
+            }
+
+            return false;
+        }
+
+        function changeDirection(event) {
+            if (changingDirection) return;
+
+            const keyPressed = event.key.toLowerCase();
+            const goingUp = dy === -gridSize;
+            const goingDown = dy === gridSize;
+            const goingRight = dx === gridSize;
+            const goingLeft = dx === -gridSize;
+
+            if ((keyPressed === "a" || keyPressed === "arrowleft") && !goingRight) {
+                dx = -gridSize;
+                dy = 0;
+                changingDirection = true;
+            }
+            if ((keyPressed === "w" || keyPressed === "arrowup") && !goingDown) {
+                dx = 0;
+                dy = -gridSize;
+                changingDirection = true;
+            }
+            if ((keyPressed === "d" || keyPressed === "arrowright") && !goingLeft) {
+                dx = gridSize;
+                dy = 0;
+                changingDirection = true;
+            }
+            if ((keyPressed === "s" || keyPressed === "arrowdown") && !goingUp) {
+                dx = 0;
+                dy = gridSize;
+                changingDirection = true;
+            }
+        }
+
+        document.addEventListener("keydown", changeDirection);
+        difficultySelect.addEventListener("change", updateHighScoreDisplay);
+        startBtn.addEventListener("click", initGame);
+
+        initGame();
+    </script>
+</body>
+</html>
